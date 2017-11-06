@@ -103,3 +103,6 @@ ENV/
 
 ## custom
 /temp
+/trained
+data/GoogleNews-vectors-negative300.bin
+data/WV-*

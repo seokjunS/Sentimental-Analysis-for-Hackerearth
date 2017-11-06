@@ -7,3 +7,4 @@ Sentimental analysis for Hackerearth Challenge (Predict the Happiness)
 * GENSIM
 * NUMPY
 * PANDAS
+* Word2Vec (from google)
