@@ -495,9 +495,10 @@ class ValidDataset(object):
 
 
 if __name__ == '__main__':
+  parse_training()
   # parse_training_split()
   # parse_test()
-  trim_word2vec(50000)
+  # trim_word2vec(50000)
   # parse_fasttext()
 
   pass
