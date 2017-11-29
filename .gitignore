@@ -106,3 +106,4 @@ ENV/
 /trained
 data/GoogleNews-vectors-negative300.bin
 data/WV-*
+data/fasttext

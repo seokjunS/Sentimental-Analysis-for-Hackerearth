@@ -6,26 +6,25 @@ import tensorflow as tf
 """
 CNN model for sentimental analysis
 """
-class Model(object):
+class CNN(object):
   def __init__(self,
                 dtype,
                 filter_widths,
-                len_seq,
                 num_filters,
-                num_labels,
                 l2_reg,
                 keep_prob,
                 w2v_weights,
                 tune_embedding=False):
-    self.inputs = tf.placeholder(tf.int32, shape=[None, len_seq], name='feature_placeholder')
-    self.labels = tf.placeholder(tf.int32, shape=[None], name='label_placeholder')
+    self.len_seq = tf.placeholder(tf.int32, shape=())
+    self.inputs = tf.placeholder(tf.int32, shape=[None, None], name='feature_placeholder')
+    self.labels = tf.placeholder(tf.float32, shape=[None], name='label_placeholder')
     self.is_training = tf.placeholder(tf.bool, shape=(), name='is_training_placeholder')
     self.learning_rate = tf.placeholder(tf.float32, shape=(), name='lr_placeholder')
 
+    self.valid_loss = tf.placeholder(tf.float64, shape=())
+
     self.filter_widths = filter_widths
     self.num_filters = num_filters
-    self.num_labels = num_labels
-    self.len_seq = len_seq
     self.l2_reg = l2_reg
     self.keep_prob = keep_prob
     self.w2v_weights = w2v_weights
@@ -35,15 +34,16 @@ class Model(object):
 
 
   def _build(self):
-    inputs = self.inputs
+    summaries = []
+    inputs = tf.identity(self.inputs)
 
     ### embedding
-    # with tf.device("/cpu:0"):
-    embeddings = tf.get_variable("embedding",
-      shape=self.w2v_weights.shape,
-      dtype=tf.float32,
-      initializer=tf.constant_initializer( self.w2v_weights ),
-      trainable=self.tune_embedding )
+    with tf.device("/cpu:0"):
+      embeddings = tf.get_variable("embedding",
+        shape=self.w2v_weights.shape,
+        dtype=tf.float32,
+        initializer=tf.constant_initializer( self.w2v_weights ),
+        trainable=self.tune_embedding )
     
     # (batch, len, emb)
     inputs = tf.nn.embedding_lookup(embeddings, inputs)
@@ -80,16 +80,16 @@ class Model(object):
                                             training=self.is_training)
         act = tf.nn.relu(act)
 
-        # (batch, 1, 1, # filters)
-        act = tf.nn.max_pool(act,
-                                  ksize=[1, 1, self.len_seq, 1],
-                                  strides=[1, 1, 1, 1],
-                                  padding='VALID')
-        # (batch, #filters)
-        act = tf.squeeze( act, axis=[1, 2] )
+        # # (batch, 1, 1, # filters)
+        # act = tf.nn.max_pool(act,
+        #                           ksize=[1, 1, 500, 1],
+        #                           strides=[1, 1, 1, 1],
+        #                           padding='VALID')
+        # # (batch, #filters)
+        # act = tf.squeeze( act, axis=[1, 2] )
 
-        # act = tf.reduce_max(act, axis=2)
-        # act = tf.squeeze( act, axis=[1] )
+        act = tf.reduce_max(act, axis=2)
+        act = tf.squeeze( act, axis=[1] )
         
 
         self.conv_acts.append( act )
@@ -97,7 +97,7 @@ class Model(object):
 
     with tf.variable_scope("concat"):
       x = tf.concat( self.conv_acts, axis=-1 )
-      # tf.summary.histogram('concat_act', x)
+      summaries.append( tf.summary.histogram('concat_act', x) )
       x = tf.layers.dropout(x, 
                             rate=self.keep_prob, 
                             training=self.is_training)
@@ -107,76 +107,94 @@ class Model(object):
     with tf.variable_scope("softmax"):
       # x: (batch, # filters)
       weights = tf.get_variable("weights",
-                                shape=[x.get_shape().as_list()[-1], self.num_labels],
+                                shape=[x.get_shape().as_list()[-1], 1],
                                 dtype=tf.float32,
                                 initializer=tf.contrib.layers.xavier_initializer(),
                                 regularizer=tf.contrib.layers.l2_regularizer(scale=self.l2_reg))
 
       biases = tf.get_variable("biases",
-                                shape=[self.num_labels],
+                                shape=[1],
                                 dtype=tf.float32,
                                 initializer=tf.zeros_initializer())
 
       # (batch, # labels)
       self.logits = tf.matmul(x, weights) + biases
+      self.logits = tf.squeeze(self.logits, axis=[1])
 
     # loss
     with tf.variable_scope("etc"):
-      softmax_loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(labels=self.labels, logits=self.logits))
-      # tf.summary.scalar('cross_loss', softmax_loss)
+      # softmax_loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(labels=self.labels, logits=self.logits))
+      softmax_loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
+                                            labels=self.labels, logits=self.logits))
+      softmax_loss = tf.cast(softmax_loss, tf.float64)
+      summaries.append(tf.summary.scalar('cross_loss', softmax_loss))
 
       reg_loss = tf.reduce_sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
-      # tf.summary.scalar('reg_loss', reg_loss)
+      reg_loss = tf.cast(reg_loss, tf.float64)
+      summaries.append(tf.summary.scalar('reg_loss', reg_loss))
 
-      self.loss = softmax_loss + reg_loss
-      # tf.summary.scalar('total_loss', self.loss)
+      self.loss_op = softmax_loss + reg_loss
+      summaries.append(tf.summary.scalar('total_loss', self.loss_op))
 
-      # optimizer = tf.train.AdamOptimizer( self.learning_rate )
+      optimizer = tf.train.AdamOptimizer( self.learning_rate )
       # optimizer = tf.train.RMSPropOptimizer( self.learning_rate )
-      optimizer = tf.train.AdadeltaOptimizer( self.learning_rate )
-      grd = optimizer.compute_gradients( self.loss )
-      self.train_op = optimizer.apply_gradients(grd)
+      # optimizer = tf.train.AdadeltaOptimizer( self.learning_rate )
+      self.train_op = optimizer.minimize( self.loss_op )
 
-      self.pred_op = tf.cast( tf.argmax(self.logits, axis=-1), tf.int32 )
+      self.score_op = tf.sigmoid(self.logits)
+      self.pred_op = tf.round(self.score_op)
 
       self.hit_op = tf.reduce_sum( tf.cast( tf.equal( self.pred_op, self.labels ) , tf.float32) )
 
-      # self.summary_op = tf.summary.merge_all()
+      self.summary_op = tf.summary.merge( summaries )
+
+      self.valid_summary_op = tf.summary.scalar('valid_loss', self.valid_loss)
 
 
-  def train(self, sess, d_features, d_labels, learning_rate):
-    # _, loss_val, hit_val, pred, summary = sess.run([self.train_op, self.loss, self.hit_op, self.pred_op, self.summary_op], feed_dict={
-    #   self.inputs: d_features,
-    #   self.labels: d_labels,
-    #   self.is_training: True,
-    #   self.learning_rate: learning_rate
-    # })
-
-    # return loss_val, hit_val, pred, summary
-    _, loss_val, hit_val, pred = sess.run([self.train_op, self.loss, self.hit_op, self.pred_op], feed_dict={
-      self.inputs: d_features,
-      self.labels: d_labels,
-      self.is_training: True,
-      self.learning_rate: learning_rate
+  def train(self, sess, data, labels, learning_rate):
+    len_seq = data.shape[1]
+    _, loss, scores, hits, summary = sess.run(
+      [self.train_op, self.loss_op, self.score_op, self.hit_op, self.summary_op],
+      feed_dict={
+        self.inputs: data,
+        self.labels: labels,
+        self.learning_rate: learning_rate,
+        self.is_training: True,
+        self.len_seq: len_seq
     })
 
-    return loss_val, hit_val, pred
+    return loss, scores, hits, summary
 
 
-  def inference_with_hits(self, sess, d_features, d_labels):
-    pred, hit_val = sess.run([self.pred_op, self.hit_op], feed_dict={
-      self.inputs: d_features,
-      self.labels: d_labels,
-      self.is_training: False
+
+  def inference_with_labels(self, sess, data, labels):
+    len_seq = data.shape[1]
+    loss, scores, pred = sess.run(
+      [self.loss_op, self.score_op, self.pred_op], 
+      feed_dict={
+        self.inputs: data,
+        self.labels: labels,
+        self.is_training: False,
+        self.len_seq: len_seq
     })
 
-    return pred, hit_val
+    return loss, scores, pred
 
 
-  def inference(self, sess, d_features):
+  def inference(self, sess, data):
+    len_seq = data.shape[1]
     pred = sess.run([self.pred_op], feed_dict={
-      self.inputs: d_features,
-      self.is_training: False
+      self.inputs: data,
+      self.is_training: False,
+      self.len_seq: len_seq
     })
 
     return pred
+
+
+  def summary_valid_loss(self, sess, loss):
+    summary = sess.run(self.valid_summary_op, feed_dict={
+      self.valid_loss: loss
+    })
+
+    return summary

@@ -13,7 +13,7 @@ def num_of_unk(dataset):
   num_pad = 0
   num_unk = 0
 
-  for x in np.nditer(dataset.data['features']):
+  for x in np.nditer(dataset.data):
     if x == dataset.w2v_dict[PAD_WORD]:
       num_pad += 1
     elif x == dataset.w2v_dict[UNK_WORD]:
@@ -33,10 +33,13 @@ def num_of_unk(dataset):
 
 if __name__ == '__main__':
   ### setup
-  w2v_dir = os.path.join(DATA_PATH, 'WV-500000')
+  # w2v_dir = os.path.join(DATA_PATH, 'WV-50000')
+  w2v_dir = os.path.join(DATA_PATH, 'fasttext')
 
   train_file = os.path.join(DATA_PATH, 'train_split.pkl')
-  valid_file = os.path.join(DATA_PATH, 'val_split.pkl')
+  # valid_file = os.path.join(DATA_PATH, 'val_split.pkl')
+  # train_file = os.path.join(DATA_PATH, 'train.csv')
+  # valid_file = os.path.join(DATA_PATH, 'val.csv')
 
   batch_size = 12
 
@@ -46,11 +49,14 @@ if __name__ == '__main__':
     w2v_dict = pickle.load(fr)
   
   ### make dataset
-  train_set = Dataset(train_file, w2v_weights, w2v_dict, batch_size=batch_size)
-  valid_set = Dataset(valid_file, w2v_weights, w2v_dict, batch_size=batch_size)
+  train_set = Dataset(train_file, w2v_weights, w2v_dict, 
+                      batch_size=batch_size,
+                      max_epoch=1,
+                      need_shuffle=False)
 
 
-  # num_of_unk(train_set)
+
+  num_of_unk(train_set)
   # num_of_unk(valid_set)
 
   pass

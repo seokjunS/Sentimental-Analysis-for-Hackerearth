@@ -7,9 +7,10 @@ import argparse
 import time
 import random
 import pickle
+from sklearn.metrics import accuracy_score
 
 sys.path.append( os.path.join(os.path.dirname(__file__), "..") )
-from utils.data_preprocess import Dataset, mkdir
+from utils.data_preprocess import Dataset, ValidDataset
 from model import *
 
 
@@ -25,7 +26,8 @@ def arg_parse(args):
   parser.add_argument(
       '--w2v_dir',
       type=str,
-      default=os.path.join(DATA_PATH, 'WV-500000'),
+      # default=os.path.join(DATA_PATH, 'WV-50000'),
+      default=os.path.join(DATA_PATH, 'WV-50000'),
       help='Word2Vec path'
   )
   parser.add_argument(
@@ -37,14 +39,14 @@ def arg_parse(args):
   parser.add_argument(
       '--keep_prob',
       type=float,
-      default=0.5,
+      default=0.7,
       help='Rate to be kept for dropout.'
   )
   # for learning
   parser.add_argument(
       '--learning_rate',
       type=float,
-      default=0.001,
+      default=0.005,
       help='Initial learning rate.'
   )
   parser.add_argument(
@@ -72,28 +74,16 @@ def arg_parse(args):
       help='Directory for input data.'
   )
   parser.add_argument(
-      '--prev_checkpoint_path',
+      '--train_dir',
       type=str,
       default='',
-      help='Restore from pre-trained model if specified.'
+      help='Path to write log, checkpoint, and summary files.'
   )
   parser.add_argument(
-      '--checkpoint_path',
-      type=str,
-      default=os.path.join(TRAIN_PATH, 'test', 'model'),
-      help='Path to write checkpoint file.'
-  )
-  parser.add_argument(
-      '--log_dir',
-      type=str,
-      default=os.path.join(TRAIN_PATH, 'test'),
-      help='Directory for log data.'
-  )
-  parser.add_argument(
-      '--summary_dir',
-      type=str,
-      default=os.path.join(TRAIN_PATH, 'test', 'summary'),
-      help='Directory for log data.'
+      '--validation_capacity',
+      type=int,
+      default=10,
+      help='How many validations should be considered for early stopping (--validation_capacity N means considering previous N-1 epochs).'
   )
   parser.add_argument(
       '--log_interval',
@@ -111,20 +101,20 @@ def arg_parse(args):
       '--filter_width',
       type=int,
       nargs='+',
-      default=[1, 3, 5],
+      default=[5],
       help='Space seperated list of filter widths. (ex, --filter_width 4 8 12)'
   )
   parser.add_argument(
       '--num_filters',
       type=int,
       nargs='+',
-      default=[200, 200, 200],
+      default=[300],
       help='Space seperated list of number of filters. (ex, --num_filters 4 8 12)'
   )
   parser.add_argument(
       '--l2_reg',
       type=float,
-      default=0.01,
+      default=0.0001,
       help=''
   )
 
@@ -136,6 +126,54 @@ def arg_parse(args):
 
 
 
+"""
+class Monitor
+"""
+class ValidationMonitor:
+  def __init__(self, capacity):
+    self.capacity = capacity
+    self.slots = [ 100000000 for _ in range(capacity) ]
+    self.pointer = 0
+
+  """
+  return: should_top, best_index, best_value
+  """
+  def should_stop(self, new_value):
+    # if capacity is 0
+    # no early stop
+    if self.capacity == 0:
+      return False, None, None
+
+    # set new value
+    curr_idx = self.pointer % self.capacity
+    self.pointer += 1
+    self.slots[ curr_idx ] = new_value
+
+    pivot_idx = (curr_idx + 1) % self.capacity # right side
+    pivot_value = self.slots[ pivot_idx ]
+    # check if all values never imporved
+    # in terms of pivot value
+    has_drop = False
+    for idx, value in enumerate(self.slots):
+      if idx != pivot_idx:
+        if pivot_value > value:
+          has_drop = True
+          break
+
+    if has_drop:
+      # it dropped, so just keep training
+      return False, None, None
+    else:
+      # no drop, pivot is the best
+      return True, max(0, self.pointer - self.capacity), pivot_value
+
+
+
+def mkdir(d):
+  if not os.path.exists(d):
+    os.makedirs(d)
+
+
 def logging(msg, FLAGS):
   fpath = os.path.join( FLAGS.log_dir, "log.txt" )
   with open( fpath, "a" ) as fw:
@@ -144,24 +182,41 @@ def logging(msg, FLAGS):
 
 
 
-def inference_with_hits(dataset, model, sess):
-  dataset.init(sess)
-  total_preds = []
-  total_hits = 0
-  total_count = 0.0
-  while True:
-    try:
-      labels, features = sess.run(dataset.get_next())
+def get_model(FLAGS, w2v_weights):
+  ### get model
+  model = CNN(dtype=tf.float32,
+                filter_widths=FLAGS.filter_width,
+                num_filters=FLAGS.num_filters,
+                l2_reg=FLAGS.l2_reg,
+                keep_prob=FLAGS.keep_prob,
+                w2v_weights=w2v_weights,
+                tune_embedding=FLAGS.tune_embedding)
 
-      pred, hits = model.inference_with_hits(sess, features, labels)
+  return model
 
-      total_hits += hits
-      total_preds.append( pred )
-      total_count += features.shape[0]
-    except tf.errors.OutOfRangeError: # one epoch finish
-      break
 
-  return total_preds, total_hits, total_count
+def validation(model, sess, dataset):
+  num_data = dataset.num_data
+  total_loss = 0.0
+
+  labels = np.zeros((num_data))
+  preds = np.zeros((num_data))
+  scores = np.zeros((num_data))
+
+  for idx, (data, label) in enumerate(dataset.iter()):
+    loss, score, pred = model.inference_with_labels(sess, data, label)
+
+    total_loss += np.mean(loss)
+
+    labels[idx] = label[0]
+    scores[idx] = np.mean(score)
+    preds[idx] = np.round(scores[idx])
+    
+
+  accuracy = accuracy_score(labels, preds)
+
+  return total_loss/num_data, accuracy
+
 
 
 
@@ -170,100 +225,88 @@ def main(sys_argv):
   FLAGS, rest_args = arg_parse(sys_argv)
   
   ### prepare directories
-  mkdir(FLAGS.log_dir)
+  mkdir(FLAGS.train_dir)
+  FLAGS.checkpoint_path = os.path.join(FLAGS.train_dir, 'ckpt', 'model')
+  mkdir(os.path.join(FLAGS.train_dir, 'ckpt'))
+  FLAGS.log_dir = os.path.join(FLAGS.train_dir)
+  FLAGS.summary_dir = os.path.join(FLAGS.train_dir, 'summary')
+  mkdir(FLAGS.summary_dir)
+
   logging("[%s: INFO] Setup: %s" % 
               (datetime.now(), str(FLAGS)), FLAGS)
 
 
+  ### get dataset
+  ### get w2v
+  w2v_weights = np.load( os.path.join(FLAGS.w2v_dir, "weights.npy") )
+  with open(os.path.join(FLAGS.w2v_dir, "dict.pkl"), 'r') as fr:
+    w2v_dict = pickle.load(fr)
+
+  ### get dataset
+  train_set = Dataset(FLAGS.train_file, w2v_weights, w2v_dict, 
+                      batch_size=FLAGS.batch_size,
+                      max_epoch=FLAGS.max_epoch,
+                      need_shuffle=True)
+  
+  valid_set = ValidDataset(FLAGS.val_file, w2v_weights, w2v_dict)
+
+  num_features = train_set.get_feature_shape()[1]
+
+
   with tf.Graph().as_default():
-    ### get w2v
-    w2v_weights = np.load( os.path.join(FLAGS.w2v_dir, "weights.npy") )
-    with open(os.path.join(FLAGS.w2v_dir, "dict.pkl"), 'r') as fr:
-      w2v_dict = pickle.load(fr)
+    model = get_model(FLAGS, w2v_weights)
+    # monitor = ValidationMonitor(capacity=FLAGS.validation_capacity)
+    monitor = ValidationMonitor(capacity=0)
 
-    ### get dataset
-    train_set = Dataset(FLAGS.train_file, w2v_weights, w2v_dict, batch_size=FLAGS.batch_size)
-    valid_set = Dataset(FLAGS.val_file, w2v_weights, w2v_dict, batch_size=FLAGS.batch_size)
-
-    _, data_length = train_set.get_feature_shape()
-
-
-    ### get model
-    model = Model(dtype=tf.float32,
-                  filter_widths=FLAGS.filter_width,
-                  len_seq=data_length,
-                  num_filters=FLAGS.num_filters,
-                  num_labels=2,
-                  l2_reg=FLAGS.l2_reg,
-                  keep_prob=FLAGS.keep_prob,
-                  w2v_weights=w2v_weights,
-                  tune_embedding=FLAGS.tune_embedding)
 
     with tf.Session() as sess:
-      step = 0
-      prev_acc = 0.0
-      max_acc = 0.0
       learning_rate = FLAGS.learning_rate
 
-      saver = tf.train.Saver()
-      # writer = tf.summary.FileWriter(FLAGS.summary_dir)
+      saver = tf.train.Saver(max_to_keep=FLAGS.validation_capacity)
+      writer = tf.summary.FileWriter(FLAGS.summary_dir)
 
       sess.run( tf.global_variables_initializer() )
 
-      for cnt_epoch in range(FLAGS.max_epoch):
-        train_set.init(sess, seed=random.randint(0, 10000000))
+      for step, (data, labels, cnt_epoch) in enumerate(train_set.iter_batch()):
+        start_time = time.time()
 
-        while True:
-          try:
-            labels, features = sess.run(train_set.get_next())
+        loss, scores, hits, summary = model.train(sess, data, labels, learning_rate)
 
-            start_time = time.time()
-
-            loss, hits, pred = model.train(sess, features, labels, learning_rate)
-            
-            duration = time.time() - start_time
-            
-            step += 1
-
-            if step % FLAGS.log_interval == 0:
-              examples_per_sec = FLAGS.batch_size / float(duration)
-
-              logging("[%s: INFO] %d step => loss: %.3f, acc: %.3f (%.1f examples/sec; %.3f sec/batch)" % 
-                (datetime.now(), step, loss, hits/FLAGS.batch_size, examples_per_sec, duration), FLAGS)
-
-              # writer.add_summary(summary, step)
-              # print('pred', pred)
-              # print('labels', labels)
+        duration = time.time() - start_time
 
 
-          except tf.errors.OutOfRangeError: # one epoch finish
-            logging("[%s: INFO] %d epoch done!" % 
-                (datetime.now(), cnt_epoch), FLAGS)
+        if step % FLAGS.log_interval == 0:
+          examples_per_sec = FLAGS.batch_size / float(duration)
 
-            saver.save(sess, FLAGS.checkpoint_path, global_step=cnt_epoch)
-            break
+          logging("[%s: INFO] %d step => loss: %.3f, acc: %.3f (%.1f examples/sec; %.3f sec/batch)" % 
+            (datetime.now(), step, loss, hits/FLAGS.batch_size, examples_per_sec, duration), FLAGS)
+
+          writer.add_summary(summary, step)
+          # print('pred', pred)
+          # print('labels', labels)
 
         ### validation
-        if cnt_epoch % FLAGS.validation_interval == 0 or cnt_epoch == FLAGS.max_epoch-1:
-          _, num_hits, counts = inference_with_hits(valid_set, model, sess)
-          curr_acc = num_hits / counts
+        if cnt_epoch is not None:
+          logging("[%s: INFO] %d epoch done!" % 
+              (datetime.now(), cnt_epoch), FLAGS)
 
-          logging("[%s: INFO] Validation Result at %d epochs: %d among %d sentences: %.3f" % 
-            (datetime.now(), cnt_epoch, num_hits, counts, curr_acc), FLAGS)
+          saver.save(sess, FLAGS.checkpoint_path, global_step=cnt_epoch)
+          
+          loss, accuracy = validation(model, sess, valid_set)
 
-          # if np.absolute(curr_acc - prev_acc) < 0.001: # diff < 0.1%
-          #   learning_rate /= 2
-          #   logging("[%s: INFO] Learning rate decaying! => %.5f" % 
-          #     (datetime.now(), learning_rate), FLAGS)
+          logging("[%s: INFO] Validation Result at %d epochs: loss: %.3f, accuracy: %.3f" % 
+            (datetime.now(), cnt_epoch, loss, accuracy), FLAGS)
 
-          # if max_acc - curr_acc > 0.05 or learning_rate < 0.0001:  
-          #   # significant drop over 5% or too small lr
-          #   logging("[%s: INFO] Stop! max: %.3f, prev: %.3f, current: %.3f" % 
-          #     (datetime.now(), max_acc, prev_acc, curr_acc), FLAGS)
-          #   break
+          valid_summary = model.summary_valid_loss(sess, loss)
+          writer.add_summary(valid_summary, step)
 
-          # max_acc = max(max_acc, curr_acc)
-          # prev_acc = curr_acc 
+          ### early stop checking
+          should_stop, best_idx, best_loss = monitor.should_stop(loss)
+
+          if should_stop:
+            logging("[%s: INFO] Early Stopping at %d. Best was %d with loss %.3f" % 
+              (datetime.now(), cnt_epoch, best_idx, best_loss), FLAGS)
+            break
 
 
 
