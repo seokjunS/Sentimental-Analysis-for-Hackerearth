@@ -88,7 +88,8 @@ class CNN(object):
         # # (batch, #filters)
         # act = tf.squeeze( act, axis=[1, 2] )
 
-        act = tf.reduce_max(act, axis=2)
+        # act = tf.reduce_max(act, axis=2)
+        act = tf.reduce_mean(act, axis=2)
         act = tf.squeeze( act, axis=[1] )
         
 
