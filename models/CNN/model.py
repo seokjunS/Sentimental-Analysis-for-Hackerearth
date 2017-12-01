@@ -18,6 +18,7 @@ class CNN(object):
     self.len_seq = tf.placeholder(tf.int32, shape=())
     self.inputs = tf.placeholder(tf.int32, shape=[None, None], name='feature_placeholder')
     self.labels = tf.placeholder(tf.float32, shape=[None], name='label_placeholder')
+    self.lengths = tf.placeholder(tf.float32, shape=[None], name='lengths')
     self.is_training = tf.placeholder(tf.bool, shape=(), name='is_training_placeholder')
     self.learning_rate = tf.placeholder(tf.float32, shape=(), name='lr_placeholder')
 
@@ -89,8 +90,15 @@ class CNN(object):
         # act = tf.squeeze( act, axis=[1, 2] )
 
         # act = tf.reduce_max(act, axis=2)
-        act = tf.reduce_mean(act, axis=2)
+        # act = tf.reduce_mean(act, axis=2)
+        # act = tf.squeeze( act, axis=[1] )
+
+        # length mask
+        length_mask = tf.expand_dims(self.lengths + 1e-10, axis=[1])
+        act = tf.reduce_sum(act, axis=2)
+
         act = tf.squeeze( act, axis=[1] )
+        act = tf.divide(act, length_mask)
         
 
         self.conv_acts.append( act )
@@ -152,13 +160,14 @@ class CNN(object):
       self.valid_summary_op = tf.summary.scalar('valid_loss', self.valid_loss)
 
 
-  def train(self, sess, data, labels, learning_rate):
+  def train(self, sess, data, labels, lengths, learning_rate):
     len_seq = data.shape[1]
     _, loss, scores, hits, summary = sess.run(
       [self.train_op, self.loss_op, self.score_op, self.hit_op, self.summary_op],
       feed_dict={
         self.inputs: data,
         self.labels: labels,
+        self.lengths: lengths,
         self.learning_rate: learning_rate,
         self.is_training: True,
         self.len_seq: len_seq
@@ -168,13 +177,14 @@ class CNN(object):
 
 
 
-  def inference_with_labels(self, sess, data, labels):
+  def inference_with_labels(self, sess, data, labels, lengths):
     len_seq = data.shape[1]
     loss, scores, pred = sess.run(
       [self.loss_op, self.score_op, self.pred_op], 
       feed_dict={
         self.inputs: data,
         self.labels: labels,
+        self.lengths: lengths,
         self.is_training: False,
         self.len_seq: len_seq
     })

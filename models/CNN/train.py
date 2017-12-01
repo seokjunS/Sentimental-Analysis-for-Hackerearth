@@ -10,7 +10,7 @@ import pickle
 from sklearn.metrics import accuracy_score
 
 sys.path.append( os.path.join(os.path.dirname(__file__), "..") )
-from utils.data_preprocess import Dataset, ValidDataset
+from utils.data_preprocess import Dataset
 from model import *
 
 
@@ -26,7 +26,7 @@ def arg_parse(args):
   parser.add_argument(
       '--w2v_dir',
       type=str,
-      # default=os.path.join(DATA_PATH, 'WV-50000'),
+      # default=os.path.join(DATA_PATH, 'WV-500000'),
       default=os.path.join(DATA_PATH, 'WV-50000'),
       help='Word2Vec path'
   )
@@ -195,7 +195,31 @@ def get_model(FLAGS, w2v_weights):
   return model
 
 
+# def validation(model, sess, dataset):
+#   num_data = dataset.num_data
+#   total_loss = 0.0
+
+#   labels = np.zeros((num_data))
+#   preds = np.zeros((num_data))
+#   scores = np.zeros((num_data))
+
+#   for idx, (data, label) in enumerate(dataset.iter()):
+#     loss, score, pred = model.inference_with_labels(sess, data, label)
+
+#     total_loss += np.mean(loss)
+
+#     labels[idx] = label[0]
+#     scores[idx] = np.mean(score)
+#     preds[idx] = np.round(scores[idx])
+    
+
+#   accuracy = accuracy_score(labels, preds)
+
+#   return total_loss/num_data, accuracy
+
+
 def validation(model, sess, dataset):
+  dataset.reset()
   num_data = dataset.num_data
   total_loss = 0.0
 
@@ -203,20 +227,34 @@ def validation(model, sess, dataset):
   preds = np.zeros((num_data))
   scores = np.zeros((num_data))
 
-  for idx, (data, label) in enumerate(dataset.iter()):
-    loss, score, pred = model.inference_with_labels(sess, data, label)
+  # for idx, (data, label, lengths, cnt_epoch) in enumerate(dataset.iter()):
+  #   loss, score, pred = model.inference_with_labels(sess, data, label, lengths)
 
-    total_loss += np.mean(loss)
+  #   total_loss += np.mean(loss)
 
-    labels[idx] = label[0]
-    scores[idx] = np.mean(score)
-    preds[idx] = np.round(scores[idx])
+  #   labels[idx] = label[0]
+  #   scores[idx] = np.mean(score)
+  #   preds[idx] = np.round(scores[idx])
+
+  sidx = 0
+  eidx = 0
+
+  for data, label, lengths, cnt_epoch in dataset.iter_batch():
+    loss, score, pred = model.inference_with_labels(sess, data, label, lengths)
+    samples = data.shape[0]
+
+    total_loss += loss*samples
+
+    sidx = eidx
+    eidx += samples
+    labels[sidx:eidx] = label
+    preds[sidx:eidx] = pred
+    scores[sidx:eidx] = score
     
 
   accuracy = accuracy_score(labels, preds)
 
   return total_loss/num_data, accuracy
-
 
 
 
@@ -247,8 +285,13 @@ def main(sys_argv):
                       batch_size=FLAGS.batch_size,
                       max_epoch=FLAGS.max_epoch,
                       need_shuffle=True)
+
+  valid_set = Dataset(FLAGS.val_file, w2v_weights, w2v_dict, 
+                      batch_size=FLAGS.batch_size,
+                      max_epoch=1,
+                      need_shuffle=False)
   
-  valid_set = ValidDataset(FLAGS.val_file, w2v_weights, w2v_dict)
+  # valid_set = ValidDataset(FLAGS.val_file, w2v_weights, w2v_dict)
 
   num_features = train_set.get_feature_shape()[1]
 
@@ -267,10 +310,10 @@ def main(sys_argv):
 
       sess.run( tf.global_variables_initializer() )
 
-      for step, (data, labels, cnt_epoch) in enumerate(train_set.iter_batch()):
+      for step, (data, labels, lengths, cnt_epoch) in enumerate(train_set.iter_batch()):
         start_time = time.time()
 
-        loss, scores, hits, summary = model.train(sess, data, labels, learning_rate)
+        loss, scores, hits, summary = model.train(sess, data, labels, lengths, learning_rate)
 
         duration = time.time() - start_time
 
@@ -286,7 +329,8 @@ def main(sys_argv):
           # print('labels', labels)
 
         ### validation
-        if cnt_epoch is not None:
+        if cnt_epoch is not None or step % 101 == 0:
+          cnt_epoch = step / 101
           logging("[%s: INFO] %d epoch done!" % 
               (datetime.now(), cnt_epoch), FLAGS)
 
