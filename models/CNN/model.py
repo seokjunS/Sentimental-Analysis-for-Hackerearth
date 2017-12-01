@@ -14,7 +14,8 @@ class CNN(object):
                 l2_reg,
                 keep_prob,
                 w2v_weights,
-                tune_embedding=False):
+                tune_embedding=False,
+                do_max_pool=False):
     self.len_seq = tf.placeholder(tf.int32, shape=())
     self.inputs = tf.placeholder(tf.int32, shape=[None, None], name='feature_placeholder')
     self.labels = tf.placeholder(tf.float32, shape=[None], name='label_placeholder')
@@ -30,6 +31,7 @@ class CNN(object):
     self.keep_prob = keep_prob
     self.w2v_weights = w2v_weights
     self.tune_embedding = tune_embedding
+    self.do_max_pool = do_max_pool
 
     self._build()
 
@@ -93,12 +95,16 @@ class CNN(object):
         # act = tf.reduce_mean(act, axis=2)
         # act = tf.squeeze( act, axis=[1] )
 
-        # length mask
-        length_mask = tf.expand_dims(self.lengths + 1e-10, axis=[1])
-        act = tf.reduce_sum(act, axis=2)
+        if self.do_max_pool:
+          act = tf.reduce_max(act, axis=2)
+          act = tf.squeeze(act, axis=[1])
+        else:
+          # length mask
+          length_mask = tf.expand_dims(self.lengths + 1e-10, axis=[1])
+          act = tf.reduce_sum(act, axis=2)
 
-        act = tf.squeeze( act, axis=[1] )
-        act = tf.divide(act, length_mask)
+          act = tf.squeeze( act, axis=[1] )
+          act = tf.divide(act, length_mask)
         
 
         self.conv_acts.append( act )

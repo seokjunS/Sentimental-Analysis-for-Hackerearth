@@ -117,6 +117,12 @@ def arg_parse(args):
       default=0.0001,
       help=''
   )
+  parser.add_argument(
+      '--do_max_pool',
+      type=bool,
+      default=False,
+      help=''
+  )
 
   FLAGS, unparsed = parser.parse_known_args(args)
 
@@ -190,7 +196,8 @@ def get_model(FLAGS, w2v_weights):
                 l2_reg=FLAGS.l2_reg,
                 keep_prob=FLAGS.keep_prob,
                 w2v_weights=w2v_weights,
-                tune_embedding=FLAGS.tune_embedding)
+                tune_embedding=FLAGS.tune_embedding,
+                do_max_pool=FLAGS.do_max_pool)
 
   return model
 
