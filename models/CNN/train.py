@@ -52,7 +52,7 @@ def arg_parse(args):
   parser.add_argument(
       '--max_epoch',
       type=int,
-      default=30,
+      default=100,
       help='Number of epochs to train.'
   )
   parser.add_argument(
@@ -298,7 +298,7 @@ def main(sys_argv):
 
   with tf.Graph().as_default():
     model = get_model(FLAGS, w2v_weights)
-    # monitor = ValidationMonitor(capacity=FLAGS.validation_capacity)
+    monitor = ValidationMonitor(capacity=FLAGS.validation_capacity)
     monitor = ValidationMonitor(capacity=0)
 
 
@@ -329,8 +329,7 @@ def main(sys_argv):
           # print('labels', labels)
 
         ### validation
-        if cnt_epoch is not None or step % 101 == 0:
-          cnt_epoch = step / 101
+        if cnt_epoch is not None:
           logging("[%s: INFO] %d epoch done!" % 
               (datetime.now(), cnt_epoch), FLAGS)
 
