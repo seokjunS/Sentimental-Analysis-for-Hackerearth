@@ -151,9 +151,9 @@ class CNN(object):
       self.loss_op = softmax_loss + reg_loss
       summaries.append(tf.summary.scalar('total_loss', self.loss_op))
 
-      optimizer = tf.train.AdamOptimizer( self.learning_rate )
+      # optimizer = tf.train.AdamOptimizer( self.learning_rate )
       # optimizer = tf.train.RMSPropOptimizer( self.learning_rate )
-      # optimizer = tf.train.AdadeltaOptimizer( self.learning_rate )
+      optimizer = tf.train.AdadeltaOptimizer( self.learning_rate )
       self.train_op = optimizer.minimize( self.loss_op )
 
       self.score_op = tf.sigmoid(self.logits)
